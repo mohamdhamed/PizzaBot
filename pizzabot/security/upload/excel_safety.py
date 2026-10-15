@@ -2,6 +2,7 @@
 # الطبقة التالتة — فحص أمان مخصص لـ XLSX
 # يفحص: zip bombs, macros, external links, formula injection
 
+import re
 import zipfile
 from pathlib import Path
 
@@ -74,9 +75,29 @@ def _check_no_external_links(zf: zipfile.ZipFile) -> None:
         except Exception:
             continue
 
-        upper = content.upper()
-        for danger in DANGEROUS_FORMULAS:
-            if danger in upper:
+        # بنفحص جوا عناصر <f> بس — النصوص العادية في الخلايا (زي
+        # "addensante") مش formulas ومفروض ما تترفضش.
+        for formula in _FORMULA_RE.findall(content):
+            danger = _dangerous_in_formula(formula)
+            if danger:
                 raise ExcelSafetyError(
                     f"formula خطرة '{danger}' موجودة في {sheet_name}"
                 )
+
+
+_FORMULA_RE = re.compile(r"<f\b[^>]*>(.*?)</f>", re.S)
+_FUNCTION_CALL_RE = re.compile(
+    r"\b(" + "|".join(DANGEROUS_FORMULAS) + r")\s*\(", re.I
+)
+# DDE: =cmd|'/c calc'!A1 — اسم برنامج وبعده pipe
+_DDE_RE = re.compile(r"[A-Za-z0-9_.]+\s*\|")
+
+
+def _dangerous_in_formula(formula: str) -> str | None:
+    """يرجع اسم الخطر لو الـ formula فيها function خطرة أو DDE، وإلا None"""
+    m = _FUNCTION_CALL_RE.search(formula)
+    if m:
+        return m.group(1).upper()
+    if _DDE_RE.search(formula):
+        return "DDE"
+    return None

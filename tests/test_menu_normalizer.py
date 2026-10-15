@@ -1,6 +1,8 @@
 # tests/test_menu_normalizer.py — منقول من Madaar (TestPizzaCanonicalFields / TestParseBool / TestNormalizePizzaDataframe)
 
 import pandas as pd
+from decimal import Decimal
+
 import pytest
 
 from pizzabot.menu.normalizer import (
@@ -49,6 +51,37 @@ class TestParseNumber:
     ])
     def test_parse(self, value, expected):
         assert parse_number(value) == expected
+
+    @pytest.mark.parametrize("value,expected", [
+        # الصيغة الإيطالية: الفاصلة عشرية والنقطة للآلاف
+        ("8,50", "8.50"),
+        ("€ 8,50", "8.50"),
+        ("8,50 €", "8.50"),
+        ("1,5", "1.5"),
+        ("1.200,00", "1200.00"),
+        ("1.200", "1200"),
+        ("1.234.567", "1234567"),
+        # الصيغة الإنجليزية
+        ("1,200.50", "1200.50"),
+        ("-3,5", "-3.5"),
+    ])
+    def test_parse_italian_and_english_separators(self, value, expected):
+        assert parse_number(value) == Decimal(expected)
+
+    @pytest.mark.parametrize("value,expected", [
+        (8.5, "8.5"),
+        (0.333, "0.333"),   # أرقام Excel ما بيتعملهاش تخمين فواصل
+        (12, "12"),
+    ])
+    def test_numeric_cells_are_not_reinterpreted(self, value, expected):
+        assert parse_number(value) == Decimal(expected)
+
+    @pytest.mark.parametrize("value", [None, float("nan"), "-", ".", "€", True])
+    def test_unparseable_returns_none(self, value):
+        assert parse_number(value) is None
+
+    def test_returns_decimal(self):
+        assert isinstance(parse_number("8,50"), Decimal)
 
 
 class TestParseBool:

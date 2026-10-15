@@ -3,6 +3,7 @@
 # منقول من Madaar (rag/normalizer.py) — الجزء الخاص بالبيتزا بس.
 
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import pandas as pd
@@ -88,19 +89,51 @@ def clean_value(value: Any) -> Any:
     return s
 
 
-def parse_number(value: Any) -> float | None:
-    """يحول قيمة لرقم — يشيل الفواصل والعملة. يرجع None لو فشل."""
+def _canonical_decimal_string(s: str) -> str:
+    """يحوّل "1.200,50" / "1,200.50" / "8,50" لصيغة Decimal ("1200.50", "8.50").
+
+    القاعدة: لو فيه "." و "," مع بعض، آخر واحد فيهم هو الفاصلة العشرية.
+    لو فيه نوع واحد بس: لو اتكرر، أو جاله بعده 3 أرقام بالظبط ("1.200")،
+    يبقى فاصل آلاف؛ غير كده يبقى فاصلة عشرية ("8,50" → 8.50).
+    """
+    if "." in s and "," in s:
+        decimal_sep = "." if s.rfind(".") > s.rfind(",") else ","
+        thousands_sep = "," if decimal_sep == "." else "."
+        return s.replace(thousands_sep, "").replace(decimal_sep, ".")
+
+    for sep in (",", "."):
+        if sep in s:
+            head, _, tail = s.rpartition(sep)
+            if s.count(sep) > 1 or len(tail) == 3:
+                return s.replace(sep, "")
+            return f"{head}.{tail}"
+    return s
+
+
+def parse_number(value: Any) -> Decimal | None:
+    """يحول قيمة لـ Decimal — يفهم الصيغة الإيطالية ("8,50") ويشيل العملة.
+
+    يرجع None لو فشل. القيم الرقمية اللي جاية من Excel (int/float) بتتحول
+    عن طريق str() من غير تخمين للفواصل.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        if isinstance(value, float) and (pd.isna(value) or value in (float("inf"), float("-inf"))):
+            return None
+        return Decimal(str(value))
+
     cleaned = clean_value(value)
     if cleaned is None:
         return None
-    s = str(cleaned)
-    digits = re.sub(r"[^\d.\-]", "", s.replace(",", ""))
-    if not digits or digits in {".", "-", "-."}:
+    digits = re.sub(r"[^\d.,\-]", "", str(cleaned))
+    if not re.fullmatch(r"-?[\d.,]*\d[\d.,]*", digits):
         return None
     try:
-        return float(digits)
-    except ValueError:
+        result = Decimal(_canonical_decimal_string(digits))
+    except InvalidOperation:
         return None
+    return result if result.is_finite() else None
 
 
 _TRUTHY = {"true", "yes", "y", "1", "si", "sì", "vero", "disponibile",

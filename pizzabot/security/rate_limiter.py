@@ -75,6 +75,25 @@ def enforce_rate_limit(request: Request) -> Tier:
     return tier
 
 
+def allow_sender(restaurant_id: str, sender_id: str, tier: Tier = "anonymous") -> bool:
+    """
+    Rate limit لرسايل الـ webhooks (WhatsApp / Telegram) — per (مطعم، مرسل).
+
+    الـ IP هنا مالوش معنى: كل الرسايل جاية من سيرفرات Meta أو Telegram،
+    فلو اتحسبت على الـ IP كل العملاء هيتقاسموا نفس الحد. بيرجع False لو
+    المرسل تجاوز الحد — والـ webhook يقرر يرد إزاي (مش 429، عشان المنصة
+    ما تعيدش إرسال الرسالة).
+    """
+    if not restaurant_id or not sender_id:
+        raise ValueError("restaurant_id و sender_id مطلوبين")
+    limits = limits_for(tier)
+    base_key = f"sender:{restaurant_id}:{sender_id}"
+    return (
+        _counter.hit(f"{base_key}:min", window=_MINUTE, limit=limits.rate_per_minute)
+        and _counter.hit(f"{base_key}:hr", window=_HOUR, limit=limits.rate_per_hour)
+    )
+
+
 def reset_rate_limits() -> None:
     """للاستخدام في الـ tests"""
     _counter.reset()

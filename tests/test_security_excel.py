@@ -76,3 +76,48 @@ def test_zip_bomb_detected(tmp_path: Path):
         zf.writestr("payload.bin", b"\x00" * (10 * 1024 * 1024))
     with pytest.raises(excel_safety.ExcelSafetyError):
         excel_safety.check_xlsx(bomb)
+
+
+def _with_cell_xml(tmp_path: Path, cell_xml: str) -> Path:
+    """يعمل xlsx ويحقن خلية XML جاهزة في sheet1"""
+    base = tmp_path / "base.xlsx"
+    pd.DataFrame({"a": [1]}).to_excel(base, index=False)
+    out = tmp_path / "injected.xlsx"
+    with zipfile.ZipFile(base, "r") as old, zipfile.ZipFile(out, "w") as new:
+        for item in old.infolist():
+            data = old.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                data = data.decode().replace(
+                    "<sheetData>",
+                    f'<sheetData><row r="99">{cell_xml}</row>',
+                ).encode()
+            new.writestr(item, data)
+    return out
+
+
+@pytest.mark.parametrize("text", [
+    "mascarpone, addensante",   # فيها DDE
+    "Pizza CALLzone speciale",  # فيها CALL
+    "Hyperlink, exec, webservice",
+])
+def test_plain_text_with_formula_names_passes(tmp_path: Path, text: str):
+    """كلمات عادية في المنيو مش formulas — ما تترفضش"""
+    path = tmp_path / "menu.xlsx"
+    pd.DataFrame([{"nome": "Tiramisù", "ingredienti": text}]).to_excel(path, index=False)
+    excel_safety.check_xlsx(path)
+
+
+def test_harmless_formula_passes(tmp_path: Path):
+    path = _with_cell_xml(tmp_path, '<c r="A99"><f>SUM(B1:B3)*1.1</f></c>')
+    excel_safety.check_xlsx(path)
+
+
+@pytest.mark.parametrize("formula,label", [
+    ("HYPERLINK(&quot;http://evil&quot;)", "HYPERLINK"),
+    ("call (&quot;x&quot;)", "CALL"),
+    ("cmd|'/c calc'!A1", "DDE"),
+])
+def test_dangerous_formulas_rejected(tmp_path: Path, formula: str, label: str):
+    path = _with_cell_xml(tmp_path, f'<c r="A99"><f>{formula}</f></c>')
+    with pytest.raises(excel_safety.ExcelSafetyError, match=label):
+        excel_safety.check_xlsx(path)
