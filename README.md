@@ -18,7 +18,7 @@ python3 -m venv .venv
 ```
 pizzabot/
 ├── config.py               ROOT / DATA_DIR / QUARANTINE_DIR
-├── order/schema.py         Order, CartItem, OrderStatus (Pydantic, EUR half-up rounding)
+├── order/schema.py         Order, CartItem, OrderStatus (Pydantic, Decimal EUR, IVA scorporo)
 ├── menu/normalizer.py      menu Excel columns (it/en/ar) → dish_name, price_eur, category, available, ingredients
 └── security/
     ├── upload/             5-layer file validation (policy, magic bytes, xlsx/pdf safety, quarantine)

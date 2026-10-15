@@ -35,6 +35,11 @@ Ollama), `chat/` (real-estate lead scoring), `shared_eval/` (retrieval-specific)
 2. **Money never comes from model text.** Prices, availability, cart totals,
    and VAT (22%) are computed from the database. The LLM only parses intent
    and calls tools (`add_to_cart`, `remove_item`, `checkout`, …).
+   Money is `Decimal` (2 places, half-up) end to end. Menu prices are
+   IVA-inclusive; `Order` extracts IVA from the gross total (`vat_eur`,
+   `net_eur`, `net + vat == total`). `vat_rate` defaults to 22% but is a
+   per-order field — **verify the rate**: Italian food service/takeaway is
+   usually 10%, 22% is the standard rate.
 3. **Multi-tenant from day one.** Every menu row, cart, order, and log line
    carries a `restaurant_id`. No shared global state across restaurants.
 4. **Real authentication.** Restaurant operators authenticate (API key or
