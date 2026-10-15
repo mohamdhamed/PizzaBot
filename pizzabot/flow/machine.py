@@ -55,7 +55,6 @@ class State(str, Enum):
     item_detail = "item_detail"
     option_group = "option_group"
     quantity = "quantity"
-    add_more = "add_more"
     cart_review = "cart_review"
     edit_line = "edit_line"
     fulfilment = "fulfilment"
@@ -253,8 +252,7 @@ def render(conv: Conversation, ctx: FlowContext) -> Screen:
 
     if s is State.category:
         opts = [ScreenOption(f"cat:{c.id}", c.name) for c in menu.active_categories()]
-        if conv.cart:
-            opts.append(ScreenOption("cart", f"🛒 Carrello ({eur(_items_total(_price_cart(menu, conv.cart)))})"))
+        opts += _cart_button(conv, menu)
         return _with_nav(Screen("Cosa desideri?", tuple(opts)))
 
     if s is State.item:
@@ -263,6 +261,7 @@ def render(conv: Conversation, ctx: FlowContext) -> Screen:
             ScreenOption(f"item:{i.id}", f"{i.name} — {eur(i.base_price_eur)}")
             for i in menu.available_items(d["category_id"])
         ]
+        opts += _cart_button(conv, menu)
         return _with_nav(Screen(cat.name if cat else "Menu", tuple(opts)))
 
     if s is State.item_detail:
@@ -273,7 +272,13 @@ def render(conv: Conversation, ctx: FlowContext) -> Screen:
         lines.append(_allergen_line(menu.allergens_for(item)))
         if item.age_restricted:
             lines.append("🔞 Vendita vietata ai minori di 18 anni.")
-        return _with_nav(Screen("\n".join(lines), (ScreenOption("add", "➕ Aggiungi"),)))
+        opts = [ScreenOption("add", "➕ Aggiungi"), ScreenOption("add:2", "×2"), ScreenOption("add:3", "×3")]
+        if menu.groups_for(item):
+            defaults = [menu.option(o)[1].name for o in _default_option_ids(menu, item)]
+            if defaults:
+                lines.append(f"Standard: {', '.join(defaults)}")
+            opts.append(ScreenOption("custom", "⚙️ Personalizza"))
+        return _with_nav(Screen("\n".join(lines), tuple(opts)))
 
     if s is State.option_group:
         item = menu.item(d["item_id"])
@@ -297,13 +302,6 @@ def render(conv: Conversation, ctx: FlowContext) -> Screen:
         price = menu.unit_price(item, option_ids)
         opts = tuple(ScreenOption(f"qty:{n}", str(n)) for n in range(1, 10))
         return _with_nav(Screen(f"{label} — {eur(price)}\nQuante?", opts))
-
-    if s is State.add_more:
-        total = _items_total(_price_cart(menu, conv.cart))
-        return Screen(
-            f"Aggiunto ✓\nTotale carrello: {eur(total)}",
-            (ScreenOption("more", "➕ Aggiungi altro"), ScreenOption("cart", "🛒 Vai al carrello"), CANCEL),
-        )
 
     if s is State.cart_review:
         return _render_cart(conv, ctx)
@@ -351,6 +349,14 @@ def render(conv: Conversation, ctx: FlowContext) -> Screen:
         return _render_confirm(conv, ctx)
 
     raise AssertionError(f"unhandled state {s}")
+
+
+def _cart_button(conv: Conversation, menu: Menu) -> list[ScreenOption]:
+    if not conv.cart:
+        return []
+    count = sum(l.quantity for l in conv.cart)
+    total = _items_total(_price_cart(menu, conv.cart))
+    return [ScreenOption("cart", f"🛒 Carrello ({count}) — {eur(total)}")]
 
 
 def _with_nav(screen: Screen) -> Screen:
@@ -506,8 +512,20 @@ def _proceed_to_checkout(conv: Conversation, ctx: FlowContext) -> None:
         _choose_fulfilment(conv, Fulfilment.pickup if s.pickup_enabled else Fulfilment.delivery)
 
 
-def _add_line(conv: Conversation, ctx: FlowContext, quantity: int) -> None:
-    option_ids = _selected_option_ids(conv, ctx.menu)
+def _default_option_ids(menu: Menu, item: MenuItem) -> list[str]:
+    """The standard pizza: for each required group, its first available
+    option(s); optional groups (extras) stay empty. Operators control the
+    default by ordering options."""
+    ids = []
+    for g in menu.groups_for(item):
+        ids += [o.id for o in g.available_options()[: g.min_select]]
+    return ids
+
+
+def _add_line(conv: Conversation, ctx: FlowContext, quantity: int,
+              option_ids: list[str]) -> str:
+    """Add (or merge) a line, then go back to the same category's items so
+    the next product is two taps away. Returns the confirmation notice."""
     item_id = conv.data["item_id"]
     for line in conv.cart:
         if line.menu_item_id == item_id and line.option_ids == option_ids:
@@ -515,7 +533,11 @@ def _add_line(conv: Conversation, ctx: FlowContext, quantity: int) -> None:
             break
     else:
         conv.cart.append(CartLine(menu_item_id=item_id, option_ids=option_ids, quantity=quantity))
-    _reset(conv, State.add_more)
+    label = _line_label(ctx.menu, CartLine(menu_item_id=item_id, option_ids=option_ids, quantity=quantity))
+    category_id = conv.data.get("category_id")
+    _reset(conv, State.item)
+    conv.data["category_id"] = category_id
+    return f"✓ Aggiunto: {label}"
 
 
 def _after_options(conv: Conversation, ctx: FlowContext) -> None:
@@ -664,16 +686,28 @@ def _transition(conv: Conversation, cid: str, ctx: FlowContext) -> tuple[str | N
         else:
             _go(conv, State.item, category_id=cid.removeprefix("cat:"))
     elif s is State.item:
-        _go(conv, State.item_detail, item_id=cid.removeprefix("item:"), selected={})
+        if cid == "cart":
+            conv.state = State.cart_review
+        else:
+            _go(conv, State.item_detail, item_id=cid.removeprefix("item:"), selected={})
     elif s is State.item_detail:
-        conv.data.pop("group_index", None)
-        _after_options(conv, ctx)
+        if cid == "custom":
+            item = menu.item(conv.data["item_id"])
+            selected: dict[str, list[str]] = {}
+            for oid in _default_option_ids(menu, item):
+                selected.setdefault(menu.option(oid)[0].id, []).append(oid)
+            conv.data["selected"] = selected
+            conv.data.pop("group_index", None)
+            _after_options(conv, ctx)
+        else:
+            qty = int(cid.removeprefix("add:")) if cid.startswith("add:") else 1
+            item = menu.item(conv.data["item_id"])
+            return _add_line(conv, ctx, qty, _default_option_ids(menu, item)), ()
     elif s is State.option_group:
         return _handle_option(conv, ctx, cid), ()
     elif s is State.quantity:
-        _add_line(conv, ctx, int(cid.removeprefix("qty:")))
-    elif s is State.add_more:
-        _reset(conv, State.category if cid == "more" else State.cart_review)
+        qty = int(cid.removeprefix("qty:"))
+        return _add_line(conv, ctx, qty, _selected_option_ids(conv, menu)), ()
     elif s is State.cart_review:
         if cid == "more":
             _reset(conv, State.category)

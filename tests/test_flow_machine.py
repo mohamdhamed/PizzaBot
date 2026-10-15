@@ -89,6 +89,10 @@ class Bot:
         self.effects = ()
 
     def press(self, cid: str):
+        assert cid in self.ids, f"{cid!r} not on screen {sorted(self.ids)}"
+        return self._send(Choice(cid))
+
+    def press_stale(self, cid: str):
         return self._send(Choice(cid))
 
     def type(self, text: str):
@@ -111,7 +115,7 @@ def margherita_maxi_bufala(bot: Bot, qty: int = 2):
     bot.press("order")
     bot.press("cat:pizze")
     bot.press("item:marg")
-    bot.press("add")
+    bot.press("custom")
     bot.press("opt:maxi")
     bot.press("opt:classico")
     bot.press("opt:bufala")
@@ -147,7 +151,8 @@ def test_can_order_ahead_while_closed_in_the_afternoon():
 def test_pickup_order_end_to_end():
     bot = Bot()
     margherita_maxi_bufala(bot)
-    assert bot.conv.state is State.add_more
+    assert bot.conv.state is State.item
+    assert bot.screen.text.startswith("✓ Aggiunto: 2× Margherita")
     bot.press("cart")
     assert "2× Margherita (Maxi, Classico, Mozzarella di bufala) — 24,00 €" in bot.screen.text
     bot.press("proceed")
@@ -200,13 +205,72 @@ def test_delivery_order_with_slot_and_notes():
     assert order.total_eur == D("14.50")
 
 
-def test_drink_without_options_goes_straight_to_quantity():
+def test_drink_has_no_customize_button():
     bot = Bot()
-    bot.press("order")
-    bot.press("cat:bevande")
-    bot.press("item:acqua")
+    for cid in ["order", "cat:bevande", "item:acqua"]:
+        bot.press(cid)
+    assert "custom" not in bot.ids
+    assert {"add", "add:2", "add:3"} <= bot.ids
+
+
+# --- quick add (standard pizza) -----------------------------------------------------
+
+def test_quick_add_uses_required_defaults_and_no_extras():
+    bot = Bot()
+    for cid in ["order", "cat:pizze", "item:marg"]:
+        bot.press(cid)
+    assert "Standard: Normale, Classico" in bot.screen.text
     bot.press("add")
-    assert bot.conv.state is State.quantity
+    (line,) = bot.conv.cart
+    assert line.option_ids == ["normale", "classico"]
+    assert line.quantity == 1
+    # Back on the same category, ready for the next pizza.
+    assert bot.conv.state is State.item
+    assert bot.conv.data["category_id"] == "pizze"
+    assert "cart" in bot.ids
+
+
+def test_quick_add_times_three():
+    bot = Bot()
+    for cid in ["order", "cat:pizze", "item:diav", "add:3"]:
+        bot.press(cid)
+    assert bot.conv.cart[0].quantity == 3
+
+
+def test_three_different_pizzas_in_few_taps():
+    bot = Bot()
+    taps = ["order", "cat:pizze",
+            "item:marg", "add",
+            "item:diav", "add",
+            "item:marg", "custom", "opt:maxi", "opt:classico", "next", "qty:1",
+            "cart"]
+    for cid in taps:
+        bot.press(cid)
+        assert not bot.screen.text.startswith(MSG_STALE), cid
+    assert bot.conv.state is State.cart_review
+    assert len(bot.conv.cart) == 3
+
+
+def test_customize_preselects_defaults():
+    bot = Bot()
+    for cid in ["order", "cat:pizze", "item:marg", "custom"]:
+        bot.press(cid)
+    labels = {o.id: o.label for o in bot.screen.options}
+    assert labels["opt:normale"].startswith("✓ ")
+    assert not labels["opt:maxi"].startswith("✓ ")
+
+
+def test_quick_add_skips_sold_out_default():
+    menu = make_menu()
+    dim = replace(menu.group("dim"), options=(
+        Option("normale", "Normale", available=False),
+        Option("maxi", "Maxi", D("4.00")),
+    ))
+    menu = replace(menu, option_groups=(dim, menu.group("impasto"), menu.group("agg")))
+    bot = Bot(menu=menu)
+    for cid in ["order", "cat:pizze", "item:marg", "add"]:
+        bot.press(cid)
+    assert bot.conv.cart[0].option_ids == ["maxi", "classico"]
 
 
 # --- input rules ------------------------------------------------------------------------
@@ -222,7 +286,7 @@ def test_free_text_outside_text_steps_is_refused():
 def test_stale_button_is_refused():
     bot = Bot()
     bot.press("order")
-    bot.press("item:marg")  # belongs to the item screen, not category
+    bot.press_stale("item:marg")  # belongs to the item screen, not category
     assert bot.conv.state is State.category
     assert bot.screen.text.startswith(MSG_STALE)
 
@@ -243,7 +307,7 @@ def test_every_option_id_fits_telegram_callback_data():
 
 def test_required_single_group_has_no_skip():
     bot = Bot()
-    for cid in ["order", "cat:pizze", "item:marg", "add"]:
+    for cid in ["order", "cat:pizze", "item:marg", "custom"]:
         bot.press(cid)
     assert "next" not in bot.ids
     assert "opt:baby" in bot.ids
@@ -252,7 +316,7 @@ def test_required_single_group_has_no_skip():
 
 def test_multi_select_toggle_and_max():
     bot = Bot()
-    for cid in ["order", "cat:pizze", "item:marg", "add", "opt:normale", "opt:classico"]:
+    for cid in ["order", "cat:pizze", "item:marg", "custom", "opt:normale", "opt:classico"]:
         bot.press(cid)
     for oid in ["bufala", "funghi", "olive"]:
         bot.press(f"opt:{oid}")
@@ -267,7 +331,7 @@ def test_multi_select_toggle_and_max():
 
 def test_extras_can_be_skipped():
     bot = Bot()
-    for cid in ["order", "cat:pizze", "item:marg", "add", "opt:normale", "opt:classico", "next"]:
+    for cid in ["order", "cat:pizze", "item:marg", "custom", "opt:normale", "opt:classico", "next"]:
         bot.press(cid)
     assert bot.conv.state is State.quantity
 
@@ -284,7 +348,7 @@ def test_item_detail_shows_allergens_and_age_notice():
 
 def test_back_walks_option_groups_then_item():
     bot = Bot()
-    for cid in ["order", "cat:pizze", "item:marg", "add", "opt:maxi"]:
+    for cid in ["order", "cat:pizze", "item:marg", "custom", "opt:maxi"]:
         bot.press(cid)
     assert bot.conv.data["group_index"] == 1
     bot.press("back")
@@ -299,7 +363,7 @@ def test_back_walks_option_groups_then_item():
 
 def test_back_from_quantity_returns_to_last_group():
     bot = Bot()
-    for cid in ["order", "cat:pizze", "item:marg", "add", "opt:maxi", "opt:classico", "next"]:
+    for cid in ["order", "cat:pizze", "item:marg", "custom", "opt:maxi", "opt:classico", "next"]:
         bot.press(cid)
     bot.press("back")
     assert bot.conv.state is State.option_group
@@ -320,8 +384,7 @@ def test_cancel_empties_cart():
 def test_identical_lines_merge():
     bot = Bot()
     margherita_maxi_bufala(bot, qty=1)
-    bot.press("more")
-    for cid in ["cat:pizze", "item:marg", "add", "opt:maxi", "opt:classico", "opt:bufala", "next", "qty:2"]:
+    for cid in ["item:marg", "custom", "opt:maxi", "opt:classico", "opt:bufala", "next", "qty:2"]:
         bot.press(cid)
     assert len(bot.conv.cart) == 1
     assert bot.conv.cart[0].quantity == 3
@@ -344,7 +407,7 @@ def test_edit_line_inc_dec_remove():
 
 def test_minimum_order_blocks_proceed():
     bot = Bot()
-    for cid in ["order", "cat:bevande", "item:acqua", "add", "qty:1", "cart"]:
+    for cid in ["order", "cat:bevande", "item:acqua", "add", "cart"]:
         bot.press(cid)
     assert "proceed" not in bot.ids
     assert "Ordine minimo: 10,00 €" in bot.screen.text
@@ -434,7 +497,7 @@ def test_slot_filled_before_confirm_asks_again():
 
 def test_item_removed_mid_options_goes_back_to_categories():
     bot = Bot()
-    for cid in ["order", "cat:pizze", "item:diav", "add"]:
+    for cid in ["order", "cat:pizze", "item:diav", "custom"]:
         bot.press(cid)
     bot.with_ctx(menu=make_menu(diav=replace(make_menu().item("diav"), available=False)))
     bot.press("opt:maxi")
@@ -446,7 +509,7 @@ def test_item_removed_mid_options_goes_back_to_categories():
 
 def test_conversation_survives_json_round_trip_mid_flow():
     bot = Bot()
-    for cid in ["order", "cat:pizze", "item:marg", "add", "opt:maxi"]:
+    for cid in ["order", "cat:pizze", "item:marg", "custom", "opt:maxi"]:
         bot.press(cid)
     bot.conv = Conversation.model_validate_json(bot.conv.model_dump_json())
     bot.press("opt:classico")

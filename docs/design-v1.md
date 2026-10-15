@@ -140,6 +140,12 @@ order_line_options order_line_id, option_id, name_snapshot, price_delta_eur
 
 ## 3. Guided flow
 
+Goal: few taps. The standard pizza is one tap from its screen, and after an
+add the customer is back on the same category list, so each further pizza is
+two taps (item → Aggiungi). Three different standard pizzas + checkout ≈ 14
+taps (was ≈ 30 when every pizza went through size → dough → extras →
+quantity → "add more?").
+
 Each state renders one **screen**: text + options. Options are buttons on
 Telegram and reply buttons / list messages on WhatsApp. Every screen except
 `start` has **⬅ Indietro** (back) and **✖ Annulla** (cancel).
@@ -151,13 +157,12 @@ stateDiagram-v2
     start --> closed: outside opening hours
     category --> item: pick category
     item --> item_detail: pick item
-    item_detail --> option_group: has option groups
-    item_detail --> quantity: no option groups
+    item --> cart_review: Carrello
+    item_detail --> item: Aggiungi / ×2 / ×3 (standard)
+    item_detail --> option_group: Personalizza
     option_group --> option_group: next group
     option_group --> quantity: last group done
-    quantity --> add_more: line added to cart
-    add_more --> category: Aggiungi altro
-    add_more --> cart_review: Vai al carrello
+    quantity --> item: line added to cart
     cart_review --> category: Aggiungi altro
     cart_review --> edit_line: Modifica
     edit_line --> cart_review
@@ -176,11 +181,10 @@ stateDiagram-v2
 |---|---|---|---|
 | `start` | Greeting + restaurant name | Ordina | Shows `closed` with hours if outside opening hours |
 | `category` | "Cosa desideri?" | active categories with ≥1 available item | |
-| `item` | category name | available items, name + price | paginate if > page size |
-| `item_detail` | name, description, price, **allergens** | Aggiungi | |
-| `option_group` | group name, e.g. "Dimensione" | options with price delta | single-select: pick → next group. Multi-select (Aggiunte): pick adds, screen repeats with ✓ marks, **Avanti** to continue; enforces min/max |
-| `quantity` | line summary + unit price | 1–9 | |
-| `add_more` | "Aggiunto ✓" + cart total | Aggiungi altro / Vai al carrello | |
+| `item` | category name (after an add: "✓ Aggiunto: …") | available items, name + price; 🛒 Carrello (count — total) | paginate if > page size |
+| `item_detail` | name, description, price, **allergens**, "Standard: Normale, Classico" | ➕ Aggiungi / ×2 / ×3 / ⚙️ Personalizza | Aggiungi adds the **standard** version: first available option of each required group, no extras. Personalizza only if the item has option groups |
+| `option_group` | group name, e.g. "Dimensione" | options with price delta, standard pre-marked ✓ | single-select: pick → next group. Multi-select (Aggiunte): pick adds, screen repeats with ✓ marks, **Avanti** to continue; enforces min/max |
+| `quantity` | line summary + unit price | 1–9 | only after Personalizza |
 | `cart_review` | lines + total (recomputed) | Procedi / Modifica / Aggiungi altro | flags unavailable items; blocks Procedi below `min_order_eur` |
 | `edit_line` | pick a line | remove / change quantity | |
 | `fulfilment` | | Ritiro / Consegna | only enabled modes shown |
