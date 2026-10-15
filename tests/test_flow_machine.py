@@ -154,7 +154,7 @@ def test_pickup_order_end_to_end():
     assert bot.conv.state is State.item
     assert bot.screen.text.startswith("✓ Aggiunto: 2× Margherita")
     bot.press("cart")
-    assert "2× Margherita (Maxi, Classico, Mozzarella di bufala) — 24,00 €" in bot.screen.text
+    assert "2× Margherita (Maxi, Mozzarella di bufala) — 24,00 €" in bot.screen.text
     bot.press("proceed")
     bot.press("pickup")
     bot.press("slot:asap")
@@ -262,6 +262,22 @@ def test_pizzas_then_drinks():
     for cid in ["menu", "cat:bevande", "item:acqua", "add:2", "cart"]:
         bot.press(cid)
     assert [l.menu_item_id for l in bot.conv.cart] == ["marg", "diav", "acqua"]
+
+
+def test_standard_options_hidden_from_customer_but_kept_for_kitchen():
+    bot = Bot()
+    for cid in ["order", "cat:pizze", "item:marg", "add"]:
+        bot.press(cid)
+    assert bot.screen.text.startswith("✓ Aggiunto: 1× Margherita\n")
+    for cid in ["item:diav", "custom", "opt:normale", "opt:integrale", "next", "qty:1", "cart"]:
+        bot.press(cid)
+    assert "1× Margherita — 6,00 €" in bot.screen.text
+    assert "1× Diavola (Integrale) — 8,50 €" in bot.screen.text
+    for cid in ["proceed", "pickup", "slot:asap", "skip", "confirm"]:
+        bot.press(cid)
+    marg, diav = bot.effects[0].order.items
+    assert [o.name for o in marg.options] == ["Normale", "Classico"]
+    assert [o.name for o in diav.options] == ["Normale", "Integrale"]
 
 
 def test_customize_preselects_defaults():

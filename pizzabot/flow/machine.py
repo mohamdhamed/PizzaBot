@@ -209,10 +209,23 @@ def _items_total(priced: list[PricedLine]) -> Decimal:
     return round_eur(sum((p.subtotal for p in priced if p.available), Decimal(0)))
 
 
+def _is_standard_option(menu: Menu, option_id: str) -> bool:
+    """The first option of a required group (Normale, Classico) is the
+    standard one. Customers don't need to read it on every line; the order
+    snapshot sent to the kitchen still lists every option."""
+    found = menu.option(option_id)
+    if found is None:
+        return False
+    group, option = found
+    return group.min_select > 0 and group.options[0].id == option.id
+
+
 def _line_label(menu: Menu, line: CartLine) -> str:
+    """Customer-facing line text: only what differs from the standard pizza."""
     item = menu.item(line.menu_item_id)
     name = item.name if item else "?"
-    opts = [menu.option(o)[1].name for o in line.option_ids if menu.option(o)]
+    opts = [menu.option(o)[1].name for o in line.option_ids
+            if menu.option(o) and not _is_standard_option(menu, o)]
     return f"{line.quantity}× {name}" + (f" ({', '.join(opts)})" if opts else "")
 
 
