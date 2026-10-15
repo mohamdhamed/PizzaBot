@@ -92,6 +92,10 @@ Ordered by risk — cheapest checks first:
    Draft: [docs/design-v1.md](docs/design-v1.md) (built from a synthetic
    menu — no real menus yet; assumptions tagged [A#]).
 3. **State machine** in pure Python — no channel, no DB — fully tested.
+   Done: `pizzabot/flow/` (`handle(conversation, event, ctx)` → screen +
+   `PlaceOrder` effect), tests in `tests/test_flow_machine.py`. Cart lines
+   hold ids only; menu, minimum order and slot are re-checked on entering
+   the cart, on the summary, and at confirm.
 4. **Telegram + PostgreSQL** end to end for one restaurant: menu import via
    `security/upload` → `menu/normalizer`, cart, checkout, kitchen
    notification (Telegram group).

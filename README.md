@@ -19,6 +19,10 @@ python3 -m venv .venv
 ```
 pizzabot/
 ├── config.py               ROOT / DATA_DIR / QUARANTINE_DIR
+├── flow/
+│   ├── menu.py             menu, option groups, allergens, restaurant settings; price rule
+│   ├── slots.py            opening hours + pickup/delivery slots
+│   └── machine.py          guided-flow state machine: handle(conversation, event, ctx)
 ├── order/schema.py         Order, CartItem, OrderStatus (Pydantic, Decimal EUR, IVA scorporo)
 ├── menu/normalizer.py      menu Excel columns (it/en/ar) → dish_name, price_eur, category, available, ingredients
 └── security/
