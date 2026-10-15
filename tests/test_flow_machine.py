@@ -251,6 +251,19 @@ def test_three_different_pizzas_in_few_taps():
     assert len(bot.conv.cart) == 3
 
 
+def test_pizzas_then_drinks():
+    """After the pizzas, drinks are one obvious tap away — not via "Indietro"."""
+    bot = Bot()
+    for cid in ["order", "cat:pizze", "item:marg", "add", "item:diav", "add"]:
+        bot.press(cid)
+    labels = {o.id: o.label for o in bot.screen.options}
+    assert labels["menu"] == "📂 Altre categorie"
+    assert "back" not in labels
+    for cid in ["menu", "cat:bevande", "item:acqua", "add:2", "cart"]:
+        bot.press(cid)
+    assert [l.menu_item_id for l in bot.conv.cart] == ["marg", "diav", "acqua"]
+
+
 def test_customize_preselects_defaults():
     bot = Bot()
     for cid in ["order", "cat:pizze", "item:marg", "custom"]:
@@ -357,7 +370,7 @@ def test_back_walks_option_groups_then_item():
     assert bot.conv.state is State.item_detail
     bot.press("back")
     assert bot.conv.state is State.item
-    bot.press("back")
+    bot.press("menu")
     assert bot.conv.state is State.category
 
 

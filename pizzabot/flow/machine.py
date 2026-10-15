@@ -262,7 +262,10 @@ def render(conv: Conversation, ctx: FlowContext) -> Screen:
             for i in menu.available_items(d["category_id"])
         ]
         opts += _cart_button(conv, menu)
-        return _with_nav(Screen(cat.name if cat else "Menu", tuple(opts)))
+        # "Back" here means "the other categories" — say so, so moving on to
+        # drinks after the pizzas is obvious.
+        opts += [ScreenOption("menu", "📂 Altre categorie"), CANCEL]
+        return Screen(cat.name if cat else "Menu", tuple(opts))
 
     if s is State.item_detail:
         item = menu.item(d["item_id"])
@@ -688,6 +691,8 @@ def _transition(conv: Conversation, cid: str, ctx: FlowContext) -> tuple[str | N
     elif s is State.item:
         if cid == "cart":
             conv.state = State.cart_review
+        elif cid == "menu":
+            _reset(conv, State.category)
         else:
             _go(conv, State.item_detail, item_id=cid.removeprefix("item:"), selected={})
     elif s is State.item_detail:

@@ -181,7 +181,7 @@ stateDiagram-v2
 |---|---|---|---|
 | `start` | Greeting + restaurant name | Ordina | Shows `closed` with hours if outside opening hours |
 | `category` | "Cosa desideri?" | active categories with ≥1 available item | |
-| `item` | category name (after an add: "✓ Aggiunto: …") | available items, name + price; 🛒 Carrello (count — total) | paginate if > page size |
+| `item` | category name (after an add: "✓ Aggiunto: …") | available items, name + price; 🛒 Carrello (count — total); 📂 Altre categorie | no "Indietro" here — "Altre categorie" replaces it so moving on to drinks is obvious; paginate if > page size |
 | `item_detail` | name, description, price, **allergens**, "Standard: Normale, Classico" | ➕ Aggiungi / ×2 / ×3 / ⚙️ Personalizza | Aggiungi adds the **standard** version: first available option of each required group, no extras. Personalizza only if the item has option groups |
 | `option_group` | group name, e.g. "Dimensione" | options with price delta, standard pre-marked ✓ | single-select: pick → next group. Multi-select (Aggiunte): pick adds, screen repeats with ✓ marks, **Avanti** to continue; enforces min/max |
 | `quantity` | line summary + unit price | 1–9 | only after Personalizza |
