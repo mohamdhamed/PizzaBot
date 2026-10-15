@@ -89,6 +89,8 @@ Ordered by risk — cheapest checks first:
    drive the data model and the shape of the steps.
 2. **Data model + flow diagram** on paper: menu, sizes, extras, allergens,
    cart, order, delivery; every step, its options, next step, back / cancel.
+   Draft: [docs/design-v1.md](docs/design-v1.md) (built from a synthetic
+   menu — no real menus yet; assumptions tagged [A#]).
 3. **State machine** in pure Python — no channel, no DB — fully tested.
 4. **Telegram + PostgreSQL** end to end for one restaurant: menu import via
    `security/upload` → `menu/normalizer`, cart, checkout, kitchen
