@@ -102,6 +102,13 @@ Ordered by risk — cheapest checks first:
 5. **Generalize:** per-restaurant auth (replaces `X-Tier`), audit, GDPR
    retention, then **WhatsApp** (Meta Cloud API).
 
+Try it locally without Telegram: `.venv/bin/python -m pizzabot.simulator`
+→ http://127.0.0.1:8765 (demo menu from `pizzabot/flow/demo.py`, kitchen panel
+shows confirmed orders).
+
+**Deployment target:** the Oracle server, everything in Docker (PostgreSQL
+included). No local Docker / PostgreSQL on the dev machine.
+
 In parallel (not code): start WhatsApp Business verification early; accountant
 on IVA + fiscal scope.
 

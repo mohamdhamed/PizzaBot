@@ -14,6 +14,14 @@ python3 -m venv .venv
 .venv/bin/python -m pytest tests/ -q
 ```
 
+Try the bot locally (no Telegram needed):
+
+```bash
+.venv/bin/python -m pizzabot.simulator
+```
+
+Then open http://127.0.0.1:8765.
+
 ## Layout
 
 ```
@@ -22,7 +30,9 @@ pizzabot/
 ├── flow/
 │   ├── menu.py             menu, option groups, allergens, restaurant settings; price rule
 │   ├── slots.py            opening hours + pickup/delivery slots
-│   └── machine.py          guided-flow state machine: handle(conversation, event, ctx)
+│   ├── machine.py          guided-flow state machine: handle(conversation, event, ctx)
+│   └── demo.py             demo restaurant (synthetic menu)
+├── simulator.py            local web chat to try the flow (stdlib only)
 ├── order/schema.py         Order, CartItem, OrderStatus (Pydantic, Decimal EUR, IVA scorporo)
 ├── menu/normalizer.py      menu Excel columns (it/en/ar) → dish_name, price_eur, category, available, ingredients
 └── security/

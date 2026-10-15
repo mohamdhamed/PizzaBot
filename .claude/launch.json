@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "simulator",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "pizzabot.simulator"],
+      "port": 8765
+    }
+  ]
+}
