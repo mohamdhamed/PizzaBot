@@ -109,3 +109,32 @@ def insert_order(conn, row: dict):
     )
     cur = conn.cursor(row_factory=rows.dict_row)
     return cur.execute(query, [row[c] for c in cols]).fetchone()
+
+
+# --- committed data (for process_event and concurrency tests) -------------------------
+
+@pytest.fixture
+def idle_conn(db_url):
+    """A connection with no open transaction; commits are real. Tests using
+    it work on their own restaurant ids, so they don't see each other."""
+    with psycopg.connect(db_url) as c:
+        yield c
+
+
+@pytest.fixture
+def seeded(idle_conn):
+    """Factory: seed the demo menu under a new restaurant id and commit."""
+    import dataclasses
+
+    from pizzabot.db.seed_demo import demo_restaurant_settings
+    from pizzabot.flow.demo import demo_menu
+    from pizzabot.storage import save_restaurant
+
+    def make(**overrides) -> str:
+        rid = f"t_{uuid.uuid4().hex[:10]}"
+        settings = dataclasses.replace(demo_restaurant_settings(), restaurant_id=rid, **overrides)
+        with idle_conn.transaction():
+            save_restaurant(idle_conn, settings, demo_menu())
+        return rid
+
+    return make
