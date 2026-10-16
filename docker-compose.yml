@@ -27,6 +27,11 @@ services:
     # Only the connection string — the app never needs the raw POSTGRES_* vars.
     environment:
       DATABASE_URL: ${DATABASE_URL:?set in .env}
+      # Tests are mounted read-only (not baked into the image), so pytest
+      # must not try to write its cache next to them.
+      PYTEST_ADDOPTS: "-p no:cacheprovider"
+    volumes:
+      - ./tests:/app/tests:ro
     depends_on:
       db:
         condition: service_healthy

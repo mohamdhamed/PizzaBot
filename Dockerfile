@@ -14,6 +14,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY --chown=app:app pizzabot/ pizzabot/
+COPY --chown=app:app migrations/ migrations/
 
 USER app
 
