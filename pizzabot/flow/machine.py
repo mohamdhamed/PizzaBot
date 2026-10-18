@@ -11,6 +11,7 @@ Rules that hold in every state:
   (stale buttons from old messages) is answered with a notice + the screen.
 - Free text is accepted only where the screen says ``accepts_text``
   (address, kitchen notes). Elsewhere → "Usa i pulsanti" + the screen.
+  Anything that is neither text nor a button (photo, sticker…) is ``Other``.
 - Money is never taken from the conversation: the cart stores ids, and every
   price shown or confirmed is recomputed from the menu.
 """
@@ -85,7 +86,7 @@ class Conversation(BaseModel):
     customer_ref: str
     state: State = State.start
     # In-progress choices: category_id, item_id, group_index, selected,
-    # line_index, fulfilment, address, slot, notes.
+    # line_index, fulfilment, address, slot, notes. In ``done``: order_code.
     data: dict = Field(default_factory=dict)
     cart: list[CartLine] = Field(default_factory=list)
 
@@ -104,7 +105,13 @@ class Text:
     text: str
 
 
-Event = Choice | Text
+@dataclass(frozen=True)
+class Other:
+    """The customer sent something that is neither text nor a button press
+    (photo, sticker, voice, location…). Never accepted as address or notes."""
+
+
+Event = Choice | Text | Other
 
 
 @dataclass(frozen=True)
@@ -152,6 +159,8 @@ BACK = ScreenOption("back", "⬅ Indietro")
 CANCEL = ScreenOption("cancel", "✖ Annulla")
 
 MSG_USE_BUTTONS = "Usa i pulsanti qui sotto 👇"
+MSG_TEXT_ONLY = "Scrivi un messaggio di testo 👇"
+MSG_NO_SLOTS = "Siamo al completo per oggi: nessun orario disponibile."
 MSG_STALE = "Questa scelta non è più valida."
 MSG_CANCELLED = "Ordine annullato."
 
@@ -258,8 +267,10 @@ def render(conv: Conversation, ctx: FlowContext) -> Screen:
         )
 
     if s is State.done:
+        code = d.get("order_code")
+        sent = f"Ordine n. {code} inviato! ✅" if code else "Ordine inviato! ✅"
         return Screen(
-            "Ordine inviato! ✅\nTi avvisiamo quando è pronto.",
+            f"{sent}\nTi avvisiamo quando è pronto.",
             (ScreenOption("order", "🍕 Nuovo ordine"),),
         )
 
@@ -346,8 +357,9 @@ def render(conv: Conversation, ctx: FlowContext) -> Screen:
 
     if s is State.slot:
         opts = []
-        if slot_rules.is_open(settings, ctx.now):
-            opts.append(ScreenOption("slot:asap", "⚡ Prima possibile"))
+        asap = _asap_slot(ctx)
+        if asap is not None:
+            opts.append(ScreenOption("slot:asap", f"⚡ Prima possibile (entro {asap:%H:%M})"))
         for t in slot_rules.available_slots(settings, ctx.now, ctx.booked_slots):
             opts.append(ScreenOption(f"slot:{t:%H%M}", f"{t:%H:%M}"))
         word = "la consegna" if d.get("fulfilment") == Fulfilment.delivery.value else "il ritiro"
@@ -414,7 +426,12 @@ def _render_confirm(conv: Conversation, ctx: FlowContext) -> Screen:
         lines.append(f"\n🛵 Consegna a: {order.address}")
     else:
         lines.append("\n🏃 Ritiro al locale")
-    when = "prima possibile" if order.slot_at is None else f"{order.slot_at:%H:%M}"
+    if order.slot_at is None:
+        when = "prima possibile"
+    elif order.asap:
+        when = f"prima possibile (entro {order.slot_at:%H:%M})"
+    else:
+        when = f"{order.slot_at:%H:%M}"
     lines.append(f"🕒 {when}")
     if order.kitchen_notes:
         lines.append(f"📝 {order.kitchen_notes}")
@@ -625,10 +642,25 @@ def _handle_address(conv: Conversation, ctx: FlowContext, text: str) -> str | No
     return None
 
 
+def _asap_slot(ctx: FlowContext) -> datetime | None:
+    """"Prima possibile" = the nearest slot that still has capacity, and only
+    while the restaurant is open. Decided from ctx only (now + booked slots);
+    the caller serialises confirms per restaurant, so the count is current."""
+    if not slot_rules.is_open(ctx.settings, ctx.now):
+        return None
+    first = slot_rules.available_slots(ctx.settings, ctx.now, ctx.booked_slots, limit=1)
+    return first[0] if first else None
+
+
 def _resolve_slot(conv: Conversation, ctx: FlowContext) -> datetime | None:
     hhmm = conv.data.get("slot")
-    if hhmm in (None, "asap"):
+    if hhmm is None:
         return None
+    if hhmm == "asap":
+        slot = _asap_slot(ctx)
+        if slot is None:
+            raise LookupError(hhmm)
+        return slot
     for t in slot_rules.available_slots(ctx.settings, ctx.now, ctx.booked_slots, limit=10_000):
         if f"{t:%H%M}" == hhmm:
             return t
@@ -657,6 +689,7 @@ def _build_order(conv: Conversation, ctx: FlowContext) -> Order:
         fulfilment=Fulfilment.delivery if delivery else Fulfilment.pickup,
         address=conv.data.get("address") if delivery else None,
         slot_at=_resolve_slot(conv, ctx),
+        asap=conv.data.get("slot") == "asap",
         kitchen_notes=conv.data.get("notes"),
         delivery_fee_eur=settings.delivery_fee_eur if delivery else Decimal("0"),
         vat_rate=settings.vat_rate,
@@ -672,14 +705,15 @@ def _checkout_problem(conv: Conversation, ctx: FlowContext) -> tuple[State, str]
         return State.cart_review, notice or "Il carrello è vuoto."
     if _items_total(_price_cart(ctx.menu, conv.cart)) < ctx.settings.min_order_eur:
         return State.cart_review, f"Ordine minimo: {eur(ctx.settings.min_order_eur)}"
-    try:
-        _resolve_slot(conv, ctx)
-    except LookupError:
-        conv.data.pop("slot", None)
-        return State.slot, "L'orario scelto non è più disponibile, scegline un altro."
     if conv.data.get("slot") == "asap" and not slot_rules.is_open(ctx.settings, ctx.now):
         conv.data.pop("slot", None)
         return State.slot, "Siamo chiusi in questo momento, scegli un orario."
+    try:
+        _resolve_slot(conv, ctx)
+    except LookupError:
+        if conv.data.pop("slot", None) == "asap":
+            return State.slot, MSG_NO_SLOTS
+        return State.slot, "L'orario scelto non è più disponibile, scegline un altro."
     return None
 
 
@@ -695,6 +729,7 @@ def _transition(conv: Conversation, cid: str, ctx: FlowContext) -> tuple[str | N
         return None, ()
 
     if s in (State.start, State.closed, State.done):
+        conv.data = {}  # drops the previous order's code
         _start_order(conv, ctx)
     elif s is State.category:
         if cid == "cart":
@@ -796,6 +831,17 @@ def _revalidate(conv: Conversation, ctx: FlowContext) -> str | None:
     return None
 
 
+def record_order_code(conv: Conversation, public_code: str) -> Conversation:
+    """After persisting a PlaceOrder effect the caller learns the order's
+    public code (the database allocates it) and records it here, so the
+    ``done`` screen — rendered again with ``render`` — shows it. Pure."""
+    if conv.state is not State.done:
+        raise ValueError(f"no order was just placed (state {conv.state.value})")
+    conv = conv.model_copy(deep=True)
+    conv.data["order_code"] = public_code
+    return conv
+
+
 def handle(conv: Conversation, event: Event, ctx: FlowContext) -> Result:
     """Apply one customer event. Never mutates the input conversation."""
     conv = conv.model_copy(deep=True)
@@ -811,11 +857,14 @@ def handle(conv: Conversation, event: Event, ctx: FlowContext) -> Result:
     notice: str | None = None
     effects: tuple[PlaceOrder, ...] = ()
 
-    if isinstance(event, Text):
+    if isinstance(event, (Text, Other)):
         if conv.state is State.done:
             conv.state = State.start
+            conv.data = {}
         elif conv.state in (State.start, State.closed):
             pass  # any message (e.g. /start, "ciao") just shows the screen
+        elif isinstance(event, Other):
+            notice = MSG_TEXT_ONLY if current.accepts_text else MSG_USE_BUTTONS
         elif not current.accepts_text:
             notice = MSG_USE_BUTTONS
         elif conv.state is State.address:

@@ -145,7 +145,10 @@ class Order(BaseModel):
     items: list[CartItem] = Field(..., min_length=1)
     fulfilment: Fulfilment = Fulfilment.pickup
     address: str | None = None
-    slot_at: datetime | None = None  # None = "prima possibile"
+    # When the order is due. "Prima possibile" orders get the nearest slot
+    # with capacity and asap=True; None only on orders from before that rule.
+    slot_at: datetime | None = None
+    asap: bool = False
     kitchen_notes: str | None = Field(default=None, max_length=MAX_KITCHEN_NOTES)
     delivery_fee_eur: Eur = Decimal("0.00")
     status: OrderStatus = OrderStatus.pending
@@ -179,6 +182,12 @@ class Order(BaseModel):
         if v is not None and v.tzinfo is None:
             raise ValueError("slot_at must be timezone-aware")
         return v
+
+    @model_validator(mode="after")
+    def _check_asap(self) -> "Order":
+        if self.asap and self.slot_at is None:
+            raise ValueError("an asap order needs the slot it was assigned")
+        return self
 
     @model_validator(mode="after")
     def _check_fulfilment(self) -> "Order":

@@ -1,7 +1,7 @@
 # test_service.py — process_event end to end against a real PostgreSQL.
 
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -10,7 +10,7 @@ import pytest
 psycopg = pytest.importorskip("psycopg")
 
 from pizzabot import service  # noqa: E402
-from pizzabot.flow.machine import MSG_STALE, Choice, State, Text  # noqa: E402
+from pizzabot.flow.machine import MSG_NO_SLOTS, MSG_STALE, Choice, State, Text  # noqa: E402
 from pizzabot.storage import booked_slots, load_conversation, load_flow_context  # noqa: E402
 
 ROME = ZoneInfo("Europe/Rome")
@@ -53,7 +53,7 @@ def test_full_flow_places_one_order(idle_conn, seeded):
     screen, placed = send(conn, rid, Choice("confirm"))
 
     assert [p.public_code for p in placed] == ["001"]
-    assert screen.text.startswith("Ordine n. 001\n")
+    assert screen.text.startswith("Ordine n. 001 inviato! ✅")
     assert conv_state(conn, rid) is State.done
     assert count_orders(conn, rid) == 1
 
@@ -106,7 +106,7 @@ def test_double_confirm_sequential_places_one_order(idle_conn, seeded):
     _, first = send(conn, rid, Choice("confirm"))
     screen, second = send(conn, rid, Choice("confirm"))
     assert len(first) == 1 and second == []
-    assert screen.text.startswith(MSG_STALE) and "Ordine inviato" in screen.text
+    assert screen.text.startswith(MSG_STALE) and "Ordine n. 001 inviato" in screen.text
     assert count_orders(conn, rid) == 1
 
 
@@ -248,3 +248,68 @@ def test_concurrent_confirms_respect_slot_capacity(idle_conn, seeded, db_url):
     assert sum(len(ps) for _, ps in results) == 1
     with conn.transaction():
         assert booked_slots(conn, rid, NOW.date()) == {SLOT: 1}
+
+
+# --- "prima possibile" holds a slot (option A) -------------------------------------------------
+
+# Open 09:00–10:30: at 10:00 (+20 min lead) the only slot left is 10:30.
+LAST_SLOT_ONLY = {wd: ((time(9, 0), time(10, 30)),) for wd in range(7)}
+
+
+def test_asap_order_takes_and_books_the_nearest_slot(idle_conn, seeded):
+    conn, rid = idle_conn, seeded()
+    to_confirm(conn, rid, slot="slot:asap")
+    _, (placed,) = send(conn, rid, Choice("confirm"))
+    assert (placed.order.asap, placed.order.slot_at) == (True, SLOT)
+    with conn.transaction():
+        row = conn.execute("SELECT asap, slot_at FROM orders WHERE restaurant_id = %s",
+                           (rid,)).fetchone()
+        assert row == (True, SLOT)
+        assert booked_slots(conn, rid, NOW.date()) == {SLOT: 1}
+
+
+def test_full_nearest_slot_moves_asap_to_the_next(idle_conn, seeded):
+    conn, rid = idle_conn, seeded(max_orders_per_slot=1)
+    to_confirm(conn, rid, ref="first", slot="slot:1030")
+    send(conn, rid, Choice("confirm"), ref="first")
+    to_confirm(conn, rid, ref="asap", slot="slot:asap")
+    _, (placed,) = send(conn, rid, Choice("confirm"), ref="asap")
+    assert placed.order.slot_at == SLOT + timedelta(minutes=15)
+
+
+def test_two_asap_orders_compete_for_the_last_slot(idle_conn, seeded, db_url):
+    conn, rid = idle_conn, seeded(max_orders_per_slot=1, opening_hours=LAST_SLOT_ONLY)
+    to_confirm(conn, rid, ref="x", slot="slot:asap")
+    to_confirm(conn, rid, ref="y", slot="slot:asap")
+    results = _concurrently(db_url, [(rid, Choice("confirm"), "x"), (rid, Choice("confirm"), "y")])
+    placed = [p for _, ps in results for p in ps]
+    assert len(placed) == 1 and placed[0].order.slot_at == SLOT
+    loser_screen = next(screen for screen, ps in results if not ps)
+    assert loser_screen.text.startswith(MSG_NO_SLOTS)
+    assert "slot:asap" not in loser_screen.option_ids()
+    loser = "y" if placed[0].order.customer_ref == "x" else "x"
+    assert conv_state(conn, rid, loser) is State.slot
+    assert count_orders(conn, rid) == 1
+
+
+def test_no_capacity_left_places_no_order(idle_conn, seeded):
+    conn, rid = idle_conn, seeded(max_orders_per_slot=1, opening_hours=LAST_SLOT_ONLY)
+    to_confirm(conn, rid, ref="late", slot="slot:asap")
+    to_confirm(conn, rid, ref="first", slot="slot:1030")
+    send(conn, rid, Choice("confirm"), ref="first")
+    screen, placed = send(conn, rid, Choice("confirm"), ref="late")
+    assert placed == [] and screen.text.startswith(MSG_NO_SLOTS)
+    assert count_orders(conn, rid) == 1
+
+
+# --- restart (/start) ----------------------------------------------------------------------------
+
+def test_restart_drops_the_stored_conversation(idle_conn, seeded):
+    conn, rid = idle_conn, seeded()
+    to_confirm(conn, rid)
+    screen, placed = service.process_event(conn, rid, "telegram", "555", Text("/start"), NOW,
+                                           restart=True)
+    assert placed == [] and screen.option_ids() == {"order"}
+    with conn.transaction():
+        conv = load_conversation(conn, rid, "telegram", "555", NOW, for_update=False)
+    assert conv.state is State.start and conv.cart == [] and conv.data == {}

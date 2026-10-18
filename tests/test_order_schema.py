@@ -339,7 +339,7 @@ def test_public_surface_stable():
     }
     assert set(Order.model_fields) == {
         "order_id", "restaurant_id", "channel", "customer_ref", "items",
-        "fulfilment", "address", "slot_at", "kitchen_notes",
+        "fulfilment", "address", "slot_at", "asap", "kitchen_notes",
         "delivery_fee_eur", "status", "vat_rate", "total_eur", "created_at",
     }
     assert set(Order.model_computed_fields) == {

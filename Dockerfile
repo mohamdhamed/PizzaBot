@@ -18,4 +18,4 @@ COPY --chown=app:app migrations/ migrations/
 
 USER app
 
-CMD ["python", "-m", "pizzabot.db.ping"]
+CMD ["python", "-m", "pizzabot.channels.telegram"]

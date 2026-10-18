@@ -1,7 +1,8 @@
 """Opening hours and pickup / delivery time slots — pure functions of ``now``.
 
-[A9] Orders are "as soon as possible" (only while open) or for a slot later
-the same day. Ranges that cross midnight are not supported in v1.
+[A9] Orders are "as soon as possible" (only while open; it takes the nearest
+slot with capacity) or for a slot later the same day. Ranges that cross
+midnight are not supported in v1.
 """
 
 from __future__ import annotations
@@ -62,7 +63,9 @@ def available_slots(
 
 def can_order(settings: RestaurantSettings, now: datetime,
               booked: Mapping[datetime, int] | None = None) -> bool:
-    return is_open(settings, now) or bool(available_slots(settings, now, booked, limit=1))
+    """Every order needs a slot with capacity ("prima possibile" takes the
+    nearest one), so ordering is possible only while one is left today."""
+    return bool(available_slots(settings, now, booked, limit=1))
 
 
 def hours_text(settings: RestaurantSettings) -> str:

@@ -1,5 +1,6 @@
-# PizzaBot — app + PostgreSQL. No host ports are published: the database is
-# reachable only on the private network `pizzabot_net`.
+# PizzaBot — app (Telegram bot, long polling) + PostgreSQL. No host ports are
+# published: the bot only makes outgoing requests to Telegram, and the
+# database is reachable only on the private network `pizzabot_net`.
 name: pizzabot
 
 services:
@@ -24,9 +25,11 @@ services:
   app:
     build: .
     image: pizzabot-app
-    # Only the connection string — the app never needs the raw POSTGRES_* vars.
+    # Only what the app needs — never the raw POSTGRES_* vars.
     environment:
       DATABASE_URL: ${DATABASE_URL:?set in .env}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set in .env}
+      RESTAURANT_ID: ${RESTAURANT_ID:?set in .env}
       # Tests are mounted read-only (not baked into the image), so pytest
       # must not try to write its cache next to them.
       PYTEST_ADDOPTS: "-p no:cacheprovider"
@@ -37,9 +40,12 @@ services:
         condition: service_healthy
     networks:
       - pizzabot_net
-    # No long-running service yet: the default command checks the DB and exits.
-    command: ["python", "-m", "pizzabot.db.ping"]
-    restart: "no"
+    # Applies pending migrations, checks the restaurant and the token, then
+    # polls Telegram until stopped.
+    command: ["python", "-m", "pizzabot.channels.telegram"]
+    restart: unless-stopped
+    # SIGTERM interrupts the long poll at once; leave time for an update in progress.
+    stop_grace_period: 20s
 
 volumes:
   pgdata:

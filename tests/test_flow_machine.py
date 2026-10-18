@@ -10,9 +10,12 @@ from pydantic import ValidationError
 
 from pizzabot.flow import (
     Category, Choice, Conversation, FlowContext, Menu, MenuItem, Option,
-    OptionGroup, PlaceOrder, RestaurantSettings, State, Text, handle, render,
+    OptionGroup, Other, PlaceOrder, RestaurantSettings, State, Text, handle,
+    record_order_code, render,
 )
-from pizzabot.flow.machine import MSG_CANCELLED, MSG_STALE, MSG_USE_BUTTONS
+from pizzabot.flow.machine import (
+    MSG_CANCELLED, MSG_NO_SLOTS, MSG_STALE, MSG_TEXT_ONLY, MSG_USE_BUTTONS,
+)
 from pizzabot.flow.menu import MenuError
 from pizzabot.flow import slots
 from pizzabot.order import Fulfilment
@@ -171,7 +174,8 @@ def test_pickup_order_end_to_end():
     assert order.restaurant_id == "rest-monza-01"
     assert order.customer_ref == "42"
     assert order.fulfilment is Fulfilment.pickup
-    assert order.slot_at is None
+    assert order.asap is True
+    assert order.slot_at == at(19, 30)  # 19:00 + 20 min lead → next slot
     assert order.kitchen_notes is None
     (line,) = order.items
     assert line.menu_item_id == "marg"
@@ -573,3 +577,115 @@ def test_slots_need_aware_now():
 def test_menu_rejects_unknown_references():
     with pytest.raises(MenuError):
         Menu(categories=(), items=(MenuItem("x", "nope", "X", D("1")),))
+
+
+# --- order code on the done screen -------------------------------------------------------------
+
+def _place_asap(bot: Bot):
+    margherita_maxi_bufala(bot, qty=1)
+    for cid in ["cart", "proceed", "pickup", "slot:asap", "skip", "confirm"]:
+        bot.press(cid)
+
+
+def test_done_screen_shows_the_code_recorded_by_the_caller():
+    bot = Bot()
+    _place_asap(bot)
+    assert bot.screen.text.startswith("Ordine inviato!")  # the machine can't know the code
+    conv = record_order_code(bot.conv, "007")
+    assert render(conv, bot.ctx).text.startswith("Ordine n. 007 inviato! ✅")
+    assert bot.conv.data == {}  # pure: the input is not changed
+
+
+def test_order_code_survives_a_stale_confirm_and_is_dropped_on_new_order():
+    bot = Bot()
+    _place_asap(bot)
+    bot.conv = record_order_code(bot.conv, "007")
+    bot.press_stale("confirm")
+    assert bot.screen.text.startswith(MSG_STALE) and "Ordine n. 007" in bot.screen.text
+    bot.press("order")
+    assert "order_code" not in bot.conv.data
+
+
+def test_record_order_code_needs_a_placed_order():
+    with pytest.raises(ValueError):
+        record_order_code(Bot().conv, "001")
+
+
+# --- "prima possibile" takes a slot (decision: option A) ------------------------------------------
+
+def test_asap_label_shows_the_slot_it_will_take():
+    bot = Bot()
+    margherita_maxi_bufala(bot)
+    for cid in ["cart", "proceed", "pickup"]:
+        bot.press(cid)
+    asap = next(o for o in bot.screen.options if o.id == "slot:asap")
+    assert asap.label == "⚡ Prima possibile (entro 19:30)"
+
+
+def test_asap_order_fills_capacity_of_its_slot():
+    full = {at(19, 30): SETTINGS.max_orders_per_slot - 1}
+    bot = Bot(booked=full)
+    _place_asap(bot)
+    order = bot.effects[0].order
+    assert (order.asap, order.slot_at) == (True, at(19, 30))
+    # With that order counted, the slot is gone for the next customer.
+    after = Bot(booked={at(19, 30): SETTINGS.max_orders_per_slot})
+    _place_asap(after)
+    assert after.effects[0].order.slot_at == at(19, 45)
+
+
+def test_asap_moves_to_next_slot_when_it_fills_before_confirm():
+    bot = Bot()
+    margherita_maxi_bufala(bot)
+    for cid in ["cart", "proceed", "pickup", "slot:asap", "skip"]:
+        bot.press(cid)
+    assert "prima possibile (entro 19:30)" in bot.screen.text
+    bot.with_ctx(booked_slots={at(19, 30): SETTINGS.max_orders_per_slot})
+    bot.press("confirm")
+    order = bot.effects[0].order
+    assert (order.asap, order.slot_at) == (True, at(19, 45))
+
+
+def test_asap_without_capacity_places_no_order_and_goes_back_to_slots():
+    bot = Bot(now=at(22))  # slots left today: 22:30 only (22:00 + 20 min lead)
+    margherita_maxi_bufala(bot)
+    for cid in ["cart", "proceed", "pickup", "slot:asap", "skip"]:
+        bot.press(cid)
+    bot.with_ctx(booked_slots={at(22, 30): SETTINGS.max_orders_per_slot})
+    bot.press("confirm")
+    assert bot.effects == ()
+    assert bot.conv.state is State.slot
+    assert bot.screen.text.startswith(MSG_NO_SLOTS)
+    assert "slot:asap" not in bot.ids
+    assert bot.conv.cart  # nothing lost: the customer can go back or cancel
+
+
+def test_open_but_fully_booked_cannot_start_an_order():
+    bot = Bot(now=at(22), booked={at(22, 30): SETTINGS.max_orders_per_slot})
+    bot.press("order")
+    assert bot.conv.state is State.closed
+
+
+# --- non-text messages ------------------------------------------------------------------------------
+
+def test_other_message_is_never_taken_as_address_or_notes():
+    bot = Bot()
+    margherita_maxi_bufala(bot, qty=1)
+    for cid in ["cart", "proceed", "delivery"]:
+        bot.press(cid)
+    bot._send(Other())
+    assert bot.conv.state is State.address and bot.screen.text.startswith(MSG_TEXT_ONLY)
+    bot.type("Via Roma 1, 20900 Monza")
+    bot.press("slot:2000")
+    bot._send(Other())
+    assert bot.conv.state is State.notes and "notes" not in bot.conv.data
+
+
+def test_other_message_outside_text_steps_says_use_buttons():
+    bot = Bot()
+    bot._send(Other())
+    assert bot.conv.state is State.start and bot.ids == {"order"}
+    bot.press("order")
+    bot._send(Other())
+    assert bot.conv.state is State.category
+    assert bot.screen.text.startswith(MSG_USE_BUTTONS)

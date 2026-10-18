@@ -4,6 +4,7 @@ from pizzabot.flow.machine import (
     Choice,
     Conversation,
     FlowContext,
+    Other,
     PlaceOrder,
     Result,
     Screen,
@@ -11,6 +12,7 @@ from pizzabot.flow.machine import (
     State,
     Text,
     handle,
+    record_order_code,
     render,
 )
 from pizzabot.flow.menu import (
@@ -24,6 +26,6 @@ from pizzabot.flow.menu import (
 
 __all__ = [
     "Category", "Choice", "Conversation", "FlowContext", "Menu", "MenuItem",
-    "Option", "OptionGroup", "PlaceOrder", "RestaurantSettings", "Result",
-    "Screen", "ScreenOption", "State", "Text", "handle", "render",
+    "Option", "OptionGroup", "Other", "PlaceOrder", "RestaurantSettings", "Result",
+    "Screen", "ScreenOption", "State", "Text", "handle", "record_order_code", "render",
 ]
